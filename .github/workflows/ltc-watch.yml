@@ -1,0 +1,75 @@
+
+name: Check Fall River LTC appointments
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      send_test_notification:
+        description: 'Test phone alert only'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fall-river-ltc-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Get watcher files
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies and browser
+        if: ${{ !inputs.send_test_notification }}
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Restore previous run status
+        if: ${{ !inputs.send_test_notification }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .ltc-state
+          key: ltc-watch-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ltc-watch-state-v1-
+
+      - name: Check calendar or test notification
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ "${{ inputs.send_test_notification }}" = "true" ]; then
+            python -m pip install --disable-pip-version-check -r requirements.txt
+            python ltc_check.py --test-notification
+          else
+            python ltc_check.py
+          fi
+
+      - name: Save latest check status
+        if: ${{ always() && !inputs.send_test_notification }}
+        uses: actions/cache/save@v4
+        with:
+          path: .ltc-state
+          key: ltc-watch-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload error screenshot
+        if: ${{ failure() && !inputs.send_test_notification }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: calendar-diagnostic-${{ github.run_number }}
+          path: diagnostic.png
+          if-no-files-found: ignore
+          retention-days: 2
